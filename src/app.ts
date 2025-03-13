@@ -1,5 +1,6 @@
 import { App } from '@slack/bolt';
 import dotenv from 'dotenv';
+import crypto from 'crypto';
 
 dotenv.config();
 
@@ -7,12 +8,38 @@ dotenv.config();
 // The bot will DM all members of this channel
 const TARGET_CHANNEL = '54y-dev';
 
+// In-memory data structures for tracking message and thread relationships
+// Map of conversation ID to a map of user IDs to their thread timestamps
+// This allows us to link messages across different users' DM channels
+const messageThreadMap = new Map<string, Map<string, string>>();
+
 const app = new App({
   token: process.env.SLACK_BOT_TOKEN,
   signingSecret: process.env.SLACK_SIGNING_SECRET,
   socketMode: true,
   appToken: process.env.SLACK_APP_TOKEN,
 });
+
+// Generate a unique conversation ID
+function generateConversationId(): string {
+  return crypto.randomBytes(8).toString('hex');
+}
+
+// Extract conversation ID from message text if it exists
+function extractConversationId(text: string): string | null {
+  const match = text.match(/\[thread:([a-f0-9]{16})\]/);
+  return match ? match[1] : null;
+}
+
+// Format message with conversation ID
+function formatMessageWithId(text: string, conversationId: string): string {
+  return `*Anonymous*: ${text} [thread:${conversationId}]`;
+}
+
+// Format reply message with conversation ID
+function formatReplyWithId(text: string, conversationId: string): string {
+  return `*Anonymous*: ${text} [thread:${conversationId}]`;
+}
 
 // Command handler for '/54y'
 app.command('/54y', async ({ command, ack, say, client }) => {
@@ -148,8 +175,72 @@ app.message(async ({ message, client, logger }) => {
       // Get sender info to exclude them from broadcast
       const senderId = msg.user;
       
-      // Format message with "Anonymous" prefix
-      const messageText = `*Anonymous*: ${msg.text || ''}`;
+      // Check if the message is a thread reply
+      const isThreadReply = msg.thread_ts !== undefined;
+      const threadTs = msg.thread_ts || msg.ts;
+      
+      // Extract conversation ID from message text if it's a reply to a previous anonymous message
+      // Or generate a new one if it's a new conversation
+      let conversationId: string;
+      
+      if (isThreadReply) {
+        // Try to get the conversation ID from the message text
+        // We need to look up the previous message in the thread to extract its ID
+        try {
+          const threadHistory = await client.conversations.replies({
+            channel: msg.channel,
+            ts: msg.thread_ts
+          });
+          
+          // Get bot ID safely
+          const authResponse = await client.auth.test();
+          const botUserId = authResponse.user_id;
+          
+          // Filter for messages from the bot that contain thread ID
+          const botMessages = threadHistory.messages?.filter(
+            (m: any) => m.user === botUserId && typeof m.text === 'string' && m.text.includes('[thread:')
+          );
+          
+          if (botMessages && botMessages.length > 0 && typeof botMessages[0].text === 'string') {
+            // Extract conversation ID from the most recent bot message
+            const messageText = botMessages[0].text;
+            const extractedId = extractConversationId(messageText);
+            if (extractedId) {
+              conversationId = extractedId;
+              logger.info(`Found existing conversation ID: ${conversationId}`);
+            } else {
+              // Fallback - generate new ID
+              conversationId = generateConversationId();
+              logger.info(`Generated new conversation ID (fallback): ${conversationId}`);
+            }
+          } else {
+            // No bot message found with ID, generate a new one
+            conversationId = generateConversationId();
+            logger.info(`Generated new conversation ID (no bot message): ${conversationId}`);
+          }
+        } catch (error) {
+          // If we can't get thread history, generate a new ID
+          conversationId = generateConversationId();
+          logger.error(`Error getting thread history, generated new ID: ${conversationId}`, error);
+        }
+      } else {
+        // New conversation, generate a new ID
+        conversationId = generateConversationId();
+        logger.info(`Generated new conversation ID: ${conversationId}`);
+      }
+      
+      // Initialize thread map for this conversation if it doesn't exist
+      if (!messageThreadMap.has(conversationId)) {
+        messageThreadMap.set(conversationId, new Map<string, string>());
+      }
+      
+      // Get thread map for this conversation
+      const threadMap = messageThreadMap.get(conversationId)!;
+      
+      // Format the message with conversation ID
+      const messageText = isThreadReply 
+        ? formatReplyWithId(msg.text || '', conversationId)
+        : formatMessageWithId(msg.text || '', conversationId);
       
       // Counter for successful messages
       let successCount = 0;
@@ -181,13 +272,47 @@ app.message(async ({ message, client, logger }) => {
           });
           
           if (dmResponse.channel?.id) {
-            // Send the anonymous message
-            await client.chat.postMessage({
-              channel: dmResponse.channel.id,
-              text: messageText,
-              mrkdwn: true
-            });
-            successCount++;
+            // If this is a thread reply and we have a thread mapping for this user
+            const userThreadTs = threadMap.get(memberId);
+            
+            if (isThreadReply && userThreadTs) {
+              try {
+                // Send as reply to the correct thread for this user
+                const response = await client.chat.postMessage({
+                  channel: dmResponse.channel.id,
+                  text: messageText,
+                  thread_ts: userThreadTs,
+                  mrkdwn: true
+                });
+                
+                successCount++;
+              } catch (threadError) {
+                // If posting to thread fails, send as regular message
+                logger.warn(`Couldn't post to thread for user ${memberId}, sending as regular message: ${threadError}`);
+                
+                // Send as new message and store the new thread reference
+                const response = await client.chat.postMessage({
+                  channel: dmResponse.channel.id,
+                  text: messageText,
+                  mrkdwn: true
+                });
+                
+                // Update the thread mapping with new timestamp
+                threadMap.set(memberId, response.ts as string);
+                successCount++;
+              }
+            } else {
+              // Send as regular message
+              const response = await client.chat.postMessage({
+                channel: dmResponse.channel.id,
+                text: messageText,
+                mrkdwn: true
+              });
+              
+              // Store this message's timestamp for this user
+              threadMap.set(memberId, response.ts as string);
+              successCount++;
+            }
           }
         } catch (dmError) {
           logger.error(`Failed to DM user ${memberId}:`, dmError);
@@ -195,13 +320,39 @@ app.message(async ({ message, client, logger }) => {
         }
       }
       
-      // Confirm to the original sender
-      await client.chat.postMessage({
+      // Confirm to the original sender with the conversation ID embedded
+      const confirmationText = isThreadReply
+        ? `Your anonymous reply was sent to ${successCount} members of #${TARGET_CHANNEL}. [thread:${conversationId}]`
+        : `Your anonymous message was sent to ${successCount} members of #${TARGET_CHANNEL}. [thread:${conversationId}]`;
+      
+      const confirmResponse = await client.chat.postMessage({
         channel: msg.channel,
-        text: `Your anonymous message was sent to ${successCount} members of #${TARGET_CHANNEL}.`
+        text: confirmationText,
+        thread_ts: isThreadReply ? threadTs : undefined,
+        mrkdwn: true
       });
       
-      logger.info(`Broadcast anonymous message to ${successCount} members in #${targetChannel.name}. Skipped ${botCount} bots.`);
+      // Store the sender's thread timestamp too
+      if (!isThreadReply) {
+        threadMap.set(senderId, msg.ts);
+      } else {
+        // Update the sender's thread timestamp if needed
+        if (!threadMap.has(senderId)) {
+          threadMap.set(senderId, msg.thread_ts as string);
+        }
+      }
+      
+      logger.info(`Broadcast anonymous ${isThreadReply ? 'thread reply' : 'message'} to ${successCount} members. Conversation ID: ${conversationId}`);
+      
+      // Clean up old conversation maps (keep only the last 100)
+      if (messageThreadMap.size > 100) {
+        // Get the oldest keys and delete them
+        const keysToDelete = [...messageThreadMap.keys()].slice(0, messageThreadMap.size - 100);
+        for (const key of keysToDelete) {
+          messageThreadMap.delete(key);
+        }
+        logger.info(`Cleaned up ${keysToDelete.length} old conversation maps`);
+      }
     } catch (error) {
       logger.error('Error processing DM:', error);
       
