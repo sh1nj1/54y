@@ -31,14 +31,14 @@ function extractConversationId(text: string): string | null {
   return match ? match[1] : null;
 }
 
-// Format message with conversation ID
+// Format message with conversation ID (invisibly embedded at the end)
 function formatMessageWithId(text: string, conversationId: string): string {
-  return `*Anonymous*: ${text} [thread:${conversationId}]`;
+  return `*Anonymous*: ${text}\u200B[thread:${conversationId}]`;
 }
 
-// Format reply message with conversation ID
+// Format reply message with conversation ID (invisibly embedded at the end)
 function formatReplyWithId(text: string, conversationId: string): string {
-  return `*Anonymous*: ${text} [thread:${conversationId}]`;
+  return `*Anonymous*: ${text}\u200B[thread:${conversationId}]`;
 }
 
 // Command handler for '/54y'
@@ -237,7 +237,7 @@ app.message(async ({ message, client, logger }) => {
       // Get thread map for this conversation
       const threadMap = messageThreadMap.get(conversationId)!;
       
-      // Format the message with conversation ID
+      // Format the message with invisible conversation ID
       const messageText = isThreadReply 
         ? formatReplyWithId(msg.text || '', conversationId)
         : formatMessageWithId(msg.text || '', conversationId);
@@ -320,15 +320,11 @@ app.message(async ({ message, client, logger }) => {
         }
       }
       
-      // Confirm to the original sender with the conversation ID embedded
-      const confirmationText = isThreadReply
-        ? `Your anonymous reply was sent to ${successCount} members of #${TARGET_CHANNEL}. [thread:${conversationId}]`
-        : `Your anonymous message was sent to ${successCount} members of #${TARGET_CHANNEL}. [thread:${conversationId}]`;
-      
-      const confirmResponse = await client.chat.postMessage({
+      // Add a threaded reply with the conversation ID (only visible to the sender)
+      await client.chat.postMessage({
         channel: msg.channel,
-        text: confirmationText,
-        thread_ts: isThreadReply ? threadTs : undefined,
+        text: `_Conversation ID: ${conversationId}_`,
+        thread_ts: isThreadReply ? threadTs : msg.ts,
         mrkdwn: true
       });
       
