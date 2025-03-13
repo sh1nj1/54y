@@ -100,7 +100,11 @@ User (via DM with reference)  --->  Bot  --->  Thread reply in channel
 
 ## 🔷 Next Steps
 
-1. **Define detailed UX (optional)** — How users will interact: error handling, feedback, etc.
+1. **Define detailed UX** — Using default Slack message and thread UX for familiarity and simplicity. This includes:
+   - Bot messages appearing as standard Slack messages
+   - Native Slack threading for replies
+   - Slack's built-in notification system
+   - Ephemeral messages for command feedback and errors
 2. **Slack App setup**: Basic Slack App creation, bot token scopes.
 3. **Implement command parsing** (e.g., `/54y send`, `/54y reply`).
 4. **Posting logic** (with thread handling).
@@ -113,5 +117,4 @@ User (via DM with reference)  --->  Bot  --->  Thread reply in channel
 - Do you want to **add more commands or behaviors**?
 - Do you want to **support attachments, images, or only text**?
 - Should we proceed to **coding phase**, or refine this more?
-
 
