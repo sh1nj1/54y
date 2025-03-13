@@ -4,7 +4,7 @@
 1. **Anonymous messages** sent to a channel (without user identity exposed).
 2. **Replying to existing anonymous messages** (as threads).
 3. Ability to send to **private channels** — even if the user is not a member.
-4. A **command-like interaction** (e.g., `/anon send Hello everyone!`).
+4. A **command-like interaction** (e.g., `/54y send Hello everyone!`).
 
 ---
 
@@ -35,14 +35,14 @@
 ```
 User (via DM or slash command)  --->  Bot  --->  Channel (public or private)
 ```
-- User sends `/anon send [message]`.
+- User sends `/54y send [message]`.
 - Bot posts to target channel as itself.
 
 ### 🧭 Flow: Anonymous Reply to a Thread
 ```
 User (via DM with reference)  --->  Bot  --->  Thread reply in channel
 ```
-- User sends `/anon reply [message ID] [reply message]`.
+- User sends `/54y reply [message ID] [reply message]`.
 - Bot uses message ID (timestamp) to post reply in that thread.
 
 ---
@@ -51,8 +51,8 @@ User (via DM with reference)  --->  Bot  --->  Thread reply in channel
 
 | Command                                 | Description                                               | Example                                      |
 |-----------------------------------------|-----------------------------------------------------------|----------------------------------------------|
-| `/anon send [#channel] [message]`        | Send anonymous message to a public/private channel        | `/anon send #random Hello everyone!`        |
-| `/anon reply [message_ts] [message]`    | Reply to an existing anonymous message in a thread       | `/anon reply 1707748394.126200 I agree!`    |
+| `/54y send [#channel] [message]`        | Send anonymous message to a public/private channel        | `/54y send #random Hello everyone!`        |
+| `/54y reply [message_ts] [message]`    | Reply to an existing anonymous message in a thread       | `/54y reply 1707748394.126200 I agree!`    |
 
 ---
 
@@ -102,7 +102,7 @@ User (via DM with reference)  --->  Bot  --->  Thread reply in channel
 
 1. **Define detailed UX (optional)** — How users will interact: error handling, feedback, etc.
 2. **Slack App setup**: Basic Slack App creation, bot token scopes.
-3. **Implement command parsing** (e.g., `/anon send`, `/anon reply`).
+3. **Implement command parsing** (e.g., `/54y send`, `/54y reply`).
 4. **Posting logic** (with thread handling).
 5. (Optional) **Thread/message tracking system** for managing reply references.
 6. (Optional) **Moderation/Abuse handling** — in case people spam it.
