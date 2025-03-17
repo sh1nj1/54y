@@ -20,14 +20,14 @@ const app = new App({
   appToken: process.env.SLACK_APP_TOKEN,
 });
 
-// Generate a unique conversation ID
+// Generate a unique conversation ID (shorter version - 4 bytes/8 hex chars)
 function generateConversationId(): string {
-  return crypto.randomBytes(8).toString('hex');
+  return crypto.randomBytes(4).toString('hex');
 }
 
 // Extract conversation ID from message text if it exists
 function extractConversationId(text: string): string | null {
-  const match = text.match(/\[Anonymous:([a-f0-9]{16})\]/);
+  const match = text.match(/\[Anonymous:([a-f0-9]{8})\]/);
   return match ? match[1] : null;
 }
 
