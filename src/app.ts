@@ -274,15 +274,18 @@ async function broadcastToMembers(
   messageText: string, 
   threadMap: ThreadMap, 
   isThreadReply: boolean
-): Promise<number> {
+): Promise<{successCount: number; botCount: number; eligibleRecipients: number}> {
   let successCount = 0;
   let botCount = 0;
+  let eligibleRecipients = 0;
   
   for (const memberId of members) {
     // Skip sending to the original sender
     if (memberId === senderId) {
       continue;
     }
+    
+    eligibleRecipients++;
     
     try {
       // Check if member is a bot before trying to DM them
@@ -294,6 +297,7 @@ async function broadcastToMembers(
       if (userInfoResponse.user?.is_bot) {
         logger.info(`Skipping bot user: ${memberId}`);
         botCount++;
+        eligibleRecipients--; // Decrement eligible recipients since bots aren't counted
         continue;
       }
       
@@ -353,7 +357,7 @@ async function broadcastToMembers(
     }
   }
   
-  return successCount;
+  return { successCount, botCount, eligibleRecipients };
 }
 
 // ============================================================================
@@ -500,8 +504,9 @@ app.message(async ({ message, client }) => {
     const targetChannel = await findTargetChannel(client);
     
     if (!targetChannel || !targetChannel.id) {
-      await client.chat.postMessage({
+      await client.chat.postEphemeral({
         channel: msg.channel,
+        user: msg.user,
         text: `I couldn't find a channel to use for anonymous messaging. Please add me to a channel first.`
       });
       return;
@@ -509,14 +514,6 @@ app.message(async ({ message, client }) => {
     
     // Get members of the target channel
     const members = await getChannelMembers(client, targetChannel.id);
-    
-    if (members.length === 0) {
-      await client.chat.postMessage({
-        channel: msg.channel,
-        text: `No members found in #${targetChannel.name} channel.`
-      });
-      return;
-    }
     
     // Get sender info to exclude them from broadcast
     const senderId = msg.user;
@@ -541,7 +538,7 @@ app.message(async ({ message, client }) => {
       : formatMessageWithId(msg.text || '', conversationId);
     
     // Broadcast to all members
-    const successCount = await broadcastToMembers(
+    const { successCount, botCount, eligibleRecipients } = await broadcastToMembers(
       client, 
       members, 
       senderId, 
@@ -549,6 +546,27 @@ app.message(async ({ message, client }) => {
       threadMap, 
       isThreadReply
     );
+    
+    // Notify user if no one received their message
+    if (eligibleRecipients === 0) {
+      await client.chat.postEphemeral({
+        channel: msg.channel,
+        user: msg.user,
+        text: `Your message wasn't delivered to anyone. All other members in #${targetChannel.name} are bots or couldn't be reached.`
+      });
+    } else if (successCount === 0) {
+      await client.chat.postEphemeral({
+        channel: msg.channel,
+        user: msg.user,
+        text: `Your message couldn't be delivered to any members in #${targetChannel.name}. There might be an issue with DM permissions.`
+      });
+    } else if (successCount < eligibleRecipients) {
+      await client.chat.postEphemeral({
+        channel: msg.channel,
+        user: msg.user,
+        text: `Your message was delivered to ${successCount} out of ${eligibleRecipients} members in #${targetChannel.name}.`
+      });
+    }
     
     // Store the sender's thread timestamp too (removed the threaded reply with conversation ID)
     if (!isThreadReply) {
@@ -567,8 +585,9 @@ app.message(async ({ message, client }) => {
     logger.error('Error processing DM:', error);
     
     // Notify the user of the error
-    await client.chat.postMessage({
+    await client.chat.postEphemeral({
       channel: msg.channel,
+      user: msg.user,
       text: `Error: ${error instanceof Error ? error.message : 'Something went wrong'}`
     });
   }
