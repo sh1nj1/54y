@@ -320,13 +320,15 @@ app.message(async ({ message, client, logger }) => {
         }
       }
       
-      // Add a threaded reply with the conversation ID (only visible to the sender)
-      await client.chat.postMessage({
-        channel: msg.channel,
-        text: `_Conversation ID: ${conversationId}_`,
-        thread_ts: isThreadReply ? threadTs : msg.ts,
-        mrkdwn: true
-      });
+      // Add a threaded reply with the conversation ID (only for new messages, not replies)
+      if (!isThreadReply) {
+        await client.chat.postMessage({
+          channel: msg.channel,
+          text: `_Conversation ID: ${conversationId}_`,
+          thread_ts: msg.ts,
+          mrkdwn: true
+        });
+      }
       
       // Store the sender's thread timestamp too
       if (!isThreadReply) {
