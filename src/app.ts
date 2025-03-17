@@ -27,18 +27,18 @@ function generateConversationId(): string {
 
 // Extract conversation ID from message text if it exists
 function extractConversationId(text: string): string | null {
-  const match = text.match(/\[thread:([a-f0-9]{16})\]/);
+  const match = text.match(/\[Anonymous:([a-f0-9]{16})\]/);
   return match ? match[1] : null;
 }
 
-// Format message with conversation ID (invisibly embedded at the end)
+// Format message with conversation ID at the beginning
 function formatMessageWithId(text: string, conversationId: string): string {
-  return `*Anonymous*: ${text}\u200B[thread:${conversationId}]`;
+  return `[Anonymous:${conversationId}] ${text}`;
 }
 
-// Format reply message with conversation ID (invisibly embedded at the end)
+// Format reply message with conversation ID at the beginning
 function formatReplyWithId(text: string, conversationId: string): string {
-  return `*Anonymous*: ${text}\u200B[thread:${conversationId}]`;
+  return `[Anonymous:${conversationId}] ${text}`;
 }
 
 // Command handler for '/54y'
@@ -198,7 +198,7 @@ app.message(async ({ message, client, logger }) => {
           
           // Filter for messages from the bot that contain thread ID
           const botMessages = threadHistory.messages?.filter(
-            (m: any) => m.user === botUserId && typeof m.text === 'string' && m.text.includes('[thread:')
+            (m: any) => m.user === botUserId && typeof m.text === 'string' && m.text.includes('[Anonymous:')
           );
           
           if (botMessages && botMessages.length > 0 && typeof botMessages[0].text === 'string') {
@@ -237,7 +237,7 @@ app.message(async ({ message, client, logger }) => {
       // Get thread map for this conversation
       const threadMap = messageThreadMap.get(conversationId)!;
       
-      // Format the message with invisible conversation ID
+      // Format the message with conversation ID at the beginning
       const messageText = isThreadReply 
         ? formatReplyWithId(msg.text || '', conversationId)
         : formatMessageWithId(msg.text || '', conversationId);
