@@ -7,7 +7,6 @@ import { Logger, LogLevel } from '@slack/logger';
 dotenv.config();
 
 // Configuration constants
-const TARGET_CHANNEL = '54y-dev';
 const MAX_CONVERSATION_HISTORY = 100; // Maximum number of conversations to keep in memory
 
 // Types for better type safety
@@ -30,6 +29,9 @@ const app = new App({
 
 // Extract logger for use throughout the app
 const logger = app.logger as Logger;
+
+// Keep track of the channel we'll use for anonymity
+let anonymousChannel: any = null;
 
 // ============================================================================
 // Utility Functions
@@ -122,6 +124,59 @@ async function sendThreadedMessage(client: any, channel: string, text: string, t
 // ============================================================================
 
 /**
+ * Find the first channel that the bot is a member of to use as the anonymous channel
+ * This is called at startup and whenever we need to find a channel
+ */
+async function findAnonymousChannel(client: any): Promise<any> {
+  try {
+    // If we already have an anonymous channel cached, return it
+    if (anonymousChannel) {
+      return anonymousChannel;
+    }
+
+    // Get the bot's user ID
+    const authResponse = await client.auth.test();
+    const botUserId = authResponse.user_id;
+    
+    // List channels the bot is a member of
+    const channelsResponse = await client.conversations.list({
+      types: 'public_channel,private_channel',
+      exclude_archived: true
+    });
+    
+    if (!channelsResponse.channels || channelsResponse.channels.length === 0) {
+      logger.warn("No channels found for the bot to use. Please add the bot to at least one channel.");
+      return null;
+    }
+    
+    // For each channel, check if the bot is a member
+    for (const channel of channelsResponse.channels) {
+      try {
+        const membersResponse = await client.conversations.members({
+          channel: channel.id
+        });
+        
+        if (membersResponse.members && membersResponse.members.includes(botUserId)) {
+          logger.info(`Found anonymous channel: #${channel.name}`);
+          anonymousChannel = channel;
+          return channel;
+        }
+      } catch (error) {
+        // If we can't check members, try the next channel
+        logger.warn(`Couldn't check members of #${channel.name}:`, error);
+        continue;
+      }
+    }
+    
+    logger.warn("Bot is not a member of any channels. Please add the bot to a channel.");
+    return null;
+  } catch (error) {
+    logger.error("Error finding anonymous channel:", error);
+    return null;
+  }
+}
+
+/**
  * Get a conversation ID from thread history or generate a new one
  */
 async function getOrCreateConversationId(client: any, msg: any, isThreadReply: boolean): Promise<string> {
@@ -183,13 +238,7 @@ async function getOrCreateConversationId(client: any, msg: any, isThreadReply: b
  * Find the target channel for broadcasting
  */
 async function findTargetChannel(client: any): Promise<any> {
-  const channelsResponse = await client.conversations.list({
-    types: 'public_channel,private_channel'
-  });
-  
-  return channelsResponse.channels?.find(
-    (channel: any) => channel.name === TARGET_CHANNEL
-  );
+  return await findAnonymousChannel(client);
 }
 
 /**
@@ -441,7 +490,7 @@ app.message(async ({ message, client }) => {
     if (!targetChannel || !targetChannel.id) {
       await client.chat.postMessage({
         channel: msg.channel,
-        text: `I couldn't find the #${TARGET_CHANNEL} channel. Please make sure I'm invited to it.`
+        text: `I couldn't find a channel to use for anonymous messaging. Please add me to a channel first.`
       });
       return;
     }
@@ -452,7 +501,7 @@ app.message(async ({ message, client }) => {
     if (members.length === 0) {
       await client.chat.postMessage({
         channel: msg.channel,
-        text: `No members found in #${TARGET_CHANNEL} channel.`
+        text: `No members found in #${targetChannel.name} channel.`
       });
       return;
     }
@@ -512,7 +561,7 @@ app.message(async ({ message, client }) => {
       threadMap.set(senderId, msg.thread_ts as string);
     }
     
-    logger.info(`Broadcast anonymous ${isThreadReply ? 'thread reply' : 'message'} to ${successCount} members. Conversation ID: ${conversationId}`);
+    logger.info(`Broadcast anonymous ${isThreadReply ? 'thread reply' : 'message'} to ${successCount} members. Channel: #${targetChannel.name}, Conversation ID: ${conversationId}`);
     
     // Clean up old conversation maps
     cleanupOldConversations();
@@ -538,4 +587,16 @@ app.message('ping', async ({ message, say }) => {
   const port = process.env.PORT || 3000;
   await app.start(port);
   console.log(`⚡️ 54y Slack bot is running on port ${port}`);
+  
+  // Try to find the anonymous channel at startup
+  try {
+    const channel = await findAnonymousChannel(app.client);
+    if (channel) {
+      console.log(`✅ Using #${channel.name} as the anonymous channel`);
+    } else {
+      console.log(`⚠️ No channel found for anonymous messaging. Please add the bot to a channel.`);
+    }
+  } catch (error) {
+    console.error(`❌ Error finding anonymous channel at startup:`, error);
+  }
 })();

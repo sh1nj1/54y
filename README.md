@@ -5,6 +5,7 @@ A Slack bot that allows users to send anonymous messages to channels and reply a
 ## Features
 
 - DM to bot or reply bot's message will broadcast DM to each users in the anonymous channel
+- The anonymous channel will be the bot's first channel it joins
 - Send anonymous messages to channels
 - Reply anonymously to message threads
 - Works with private channels (bot must be a member)
