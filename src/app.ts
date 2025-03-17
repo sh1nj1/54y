@@ -1,6 +1,5 @@
 import { App } from '@slack/bolt';
 import dotenv from 'dotenv';
-import crypto from 'crypto';
 import { Logger, LogLevel } from '@slack/logger';
 
 // Load environment variables
@@ -38,10 +37,16 @@ let anonymousChannel: any = null;
 // ============================================================================
 
 /**
- * Generate a unique conversation ID (4 bytes/8 hex chars)
+ * Get a conversation ID based on the message timestamp
+ * This ensures uniqueness and eliminates the need for separate threaded replies
  */
-function generateConversationId(): string {
-  return crypto.randomBytes(4).toString('hex');
+function getConversationIdFromTs(ts: string): string {
+  // Convert the timestamp to a hex string for consistency
+  // Remove periods and convert to hex
+  const tsWithoutPeriod = ts.replace('.', '');
+  
+  // Take up to 8 characters to match the format of previous IDs
+  return tsWithoutPeriod.substring(0, 8);
 }
 
 /**
@@ -64,7 +69,7 @@ function extractConversationIdFromThread(messages: any[]): string | null {
         return idFromAnon;
       }
       
-      // Check for "_Conversation ID: XXXXXXXX_" format (italicized)
+      // Check for "_Conversation ID: XXXXXXXX_" format (italicized) - for backward compatibility
       const idMatch = message.text.match(/_Conversation ID: ([a-f0-9]{8})_/);
       if (idMatch) {
         return idMatch[1];
@@ -180,10 +185,10 @@ async function findAnonymousChannel(client: any): Promise<any> {
  * Get a conversation ID from thread history or generate a new one
  */
 async function getOrCreateConversationId(client: any, msg: any, isThreadReply: boolean): Promise<string> {
-  // If not a thread reply, generate a new ID
+  // If not a thread reply, create ID from the message timestamp
   if (!isThreadReply) {
-    const newId = generateConversationId();
-    logger.info(`Generated new conversation ID: ${newId}`);
+    const newId = getConversationIdFromTs(msg.ts);
+    logger.info(`Created conversation ID from timestamp: ${newId}`);
     return newId;
   }
   
@@ -219,17 +224,24 @@ async function getOrCreateConversationId(client: any, msg: any, isThreadReply: b
           return extractedId;
         }
       }
+      
+      // If no ID found and we have the parent message's ts, use that
+      if (threadHistory.messages[0] && threadHistory.messages[0].ts) {
+        const idFromParentTs = getConversationIdFromTs(threadHistory.messages[0].ts);
+        logger.info(`Created conversation ID from parent message timestamp: ${idFromParentTs}`);
+        return idFromParentTs;
+      }
     }
     
-    // If all extraction attempts fail, generate new ID
-    const newId = generateConversationId();
-    logger.info(`Generated new conversation ID (no existing ID found): ${newId}`);
+    // If all extraction attempts fail, generate from thread_ts
+    const newId = getConversationIdFromTs(msg.thread_ts);
+    logger.info(`Created conversation ID from thread timestamp: ${newId}`);
     return newId;
     
   } catch (error) {
-    // If we can't get thread history, generate a new ID
-    const newId = generateConversationId();
-    logger.error(`Error getting thread history, generated new ID: ${newId}`, error);
+    // If we can't get thread history, generate from thread_ts
+    const newId = getConversationIdFromTs(msg.thread_ts);
+    logger.error(`Error getting thread history, created ID from thread timestamp: ${newId}`, error);
     return newId;
   }
 }
@@ -538,22 +550,7 @@ app.message(async ({ message, client }) => {
       isThreadReply
     );
     
-    // Add a threaded reply with the conversation ID (only for new messages, not replies)
-    if (!isThreadReply) {
-      try {
-        await client.chat.postMessage({
-          channel: msg.channel,
-          text: `_Conversation ID: ${conversationId}_`,
-          thread_ts: msg.ts,
-          mrkdwn: true
-        });
-      } catch (threadError) {
-        logger.error('Error posting thread reply with conversation ID:', threadError);
-        // Continue execution even if thread reply fails
-      }
-    }
-    
-    // Store the sender's thread timestamp too
+    // Store the sender's thread timestamp too (removed the threaded reply with conversation ID)
     if (!isThreadReply) {
       threadMap.set(senderId, msg.ts);
     } else if (!threadMap.has(senderId)) {
