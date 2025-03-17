@@ -31,6 +31,26 @@ function extractConversationId(text: string): string | null {
   return match ? match[1] : null;
 }
 
+// Extract conversation ID from thread messages, including bot's "Conversation ID" messages
+function extractConversationIdFromThread(messages: any[]): string | null {
+  // First try to find any message with [Anonymous:id] format
+  for (const message of messages) {
+    if (typeof message.text === 'string') {
+      const idFromAnon = extractConversationId(message.text);
+      if (idFromAnon) {
+        return idFromAnon;
+      }
+      
+      // Check for "_Conversation ID: XXXXXXXX_" format (italicized)
+      const idMatch = message.text.match(/_Conversation ID: ([a-f0-9]{8})_/);
+      if (idMatch) {
+        return idMatch[1];
+      }
+    }
+  }
+  return null;
+}
+
 // Format message with conversation ID at the beginning
 function formatMessageWithId(text: string, conversationId: string): string {
   return `[Anonymous:${conversationId}] ${text}`;
@@ -38,7 +58,7 @@ function formatMessageWithId(text: string, conversationId: string): string {
 
 // Format reply message with conversation ID at the beginning
 function formatReplyWithId(text: string, conversationId: string): string {
-  return `[Anonymous:${conversationId}] ${text}`;
+  return `[Anonymous] ${text}`;
 }
 
 // Command handler for '/54y'
@@ -139,7 +159,7 @@ app.message(async ({ message, client, logger }) => {
   
   // Only process direct messages (im) that aren't from bots
   if (msg.channel_type === 'im' && !msg.subtype) {
-    logger.info(`Received DM: ${msg.text?.substring(0, 20)}...`);
+    logger.info(`Received DM: ${msg.text?.substring(0, 20)}...`, msg);
     
     try {
       // Find the target channel
@@ -195,28 +215,40 @@ app.message(async ({ message, client, logger }) => {
           // Get bot ID safely
           const authResponse = await client.auth.test();
           const botUserId = authResponse.user_id;
+          logger.info("thradHIstory=", threadHistory);
           
-          // Filter for messages from the bot that contain thread ID
-          const botMessages = threadHistory.messages?.filter(
-            (m: any) => m.user === botUserId && typeof m.text === 'string' && m.text.includes('[Anonymous:')
-          );
+          // First try to extract conversation ID from any message in the thread
+          let extractedId = null;
+          if (threadHistory.messages && threadHistory.messages.length > 0) {
+            extractedId = extractConversationIdFromThread(threadHistory.messages);
+          }
           
-          if (botMessages && botMessages.length > 0 && typeof botMessages[0].text === 'string') {
-            // Extract conversation ID from the most recent bot message
-            const messageText = botMessages[0].text;
-            const extractedId = extractConversationId(messageText);
-            if (extractedId) {
-              conversationId = extractedId;
-              logger.info(`Found existing conversation ID: ${conversationId}`);
-            } else {
-              // Fallback - generate new ID
-              conversationId = generateConversationId();
-              logger.info(`Generated new conversation ID (fallback): ${conversationId}`);
-            }
+          if (extractedId) {
+            conversationId = extractedId;
+            logger.info(`Found existing conversation ID: ${conversationId}`);
           } else {
-            // No bot message found with ID, generate a new one
-            conversationId = generateConversationId();
-            logger.info(`Generated new conversation ID (no bot message): ${conversationId}`);
+            // Filter for messages from the bot that contain thread ID as fallback
+            const botMessages = threadHistory.messages?.filter(
+              (m: any) => m.user === botUserId && typeof m.text === 'string' && m.text.includes('[Anonymous:')
+            );
+            
+            if (botMessages && botMessages.length > 0 && typeof botMessages[0].text === 'string') {
+              // Extract conversation ID from the most recent bot message
+              const messageText = botMessages[0].text;
+              extractedId = extractConversationId(messageText);
+              if (extractedId) {
+                conversationId = extractedId;
+                logger.info(`Found existing conversation ID from bot message: ${conversationId}`);
+              } else {
+                // Fallback - generate new ID
+                conversationId = generateConversationId();
+                logger.info(`Generated new conversation ID (fallback): ${conversationId}`);
+              }
+            } else {
+              // No bot message found with ID, generate a new one
+              conversationId = generateConversationId();
+              logger.info(`Generated new conversation ID (no bot message): ${conversationId}`);
+            }
           }
         } catch (error) {
           // If we can't get thread history, generate a new ID
