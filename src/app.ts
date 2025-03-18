@@ -145,19 +145,39 @@ async function findAnonymousChannel(client: any): Promise<any> {
     const authResponse = await client.auth.test();
     const botUserId = authResponse.user_id;
     
-    // List channels the bot is a member of
-    const channelsResponse = await client.conversations.list({
-      types: 'public_channel,private_channel',
-      exclude_archived: true
-    });
+    // List channels with pagination handling
+    let allChannels: any[] = [];
+    let cursor: string | undefined;
     
-    if (!channelsResponse.channels || channelsResponse.channels.length === 0) {
+    do {
+      // Get page of channels
+      const channelsResponse = await client.conversations.list({
+        types: 'public_channel,private_channel',
+        exclude_archived: true,
+        limit: 200, // Maximum allowed by Slack API
+        cursor: cursor
+      });
+      
+      if (!channelsResponse.channels || channelsResponse.channels.length === 0) {
+        break;
+      }
+      
+      // Add this page of channels to our collection
+      allChannels = allChannels.concat(channelsResponse.channels);
+      
+      // Get cursor for next page (if any)
+      cursor = channelsResponse.response_metadata?.next_cursor;
+    } while (cursor);
+    
+    if (allChannels.length === 0) {
       logger.warn("No channels found for the bot to use. Please add the bot to at least one channel.");
       return null;
     }
     
+    logger.info(`Found ${allChannels.length} total channels to check`);
+    
     // For each channel, check if the bot is a member
-    for (const channel of channelsResponse.channels) {
+    for (const channel of allChannels) {
       try {
         const membersResponse = await client.conversations.members({
           channel: channel.id
@@ -176,6 +196,7 @@ async function findAnonymousChannel(client: any): Promise<any> {
     }
     
     logger.warn("Bot is not a member of any channels. Please add the bot to a channel.");
+    logger.info(`Checked ${allChannels.length} channels, but bot is not a member of any of them.`);
     return null;
   } catch (error) {
     logger.error("Error finding anonymous channel:", error);
