@@ -1,6 +1,9 @@
 import { App } from '@slack/bolt';
 import dotenv from 'dotenv';
 import { Logger, LogLevel } from '@slack/logger';
+import {
+  encodeTimestampToZeroWidth
+} from './zero-width-encoding';
 
 // Load environment variables
 dotenv.config();
@@ -45,15 +48,14 @@ function getConversationIdFromTs(ts: string): string {
   // Remove periods and convert to hex
   const tsWithoutPeriod = ts.replace('.', '');
   
-  // Take up to 8 characters to match the format of previous IDs
-  return tsWithoutPeriod.substring(0, 8);
+  return encodeTimestampToZeroWidth(tsWithoutPeriod);
 }
 
 /**
  * Extract conversation ID from message text in [Anonymous:id] format
  */
 function extractConversationId(text: string): string | null {
-  const match = text.match(/\[Anonymous:([a-f0-9]{8})\]/);
+  const match = text.match(/\[Anonymous:(.+?)\]/);
   return match ? match[1] : null;
 }
 
