@@ -131,6 +131,51 @@ async function sendThreadedMessage(client: any, channel: string, text: string, t
 // ============================================================================
 
 /**
+ * Check if a message contains file attachments
+ */
+function messageHasFiles(msg: any): boolean {
+  return (
+    msg.files && 
+    Array.isArray(msg.files) && 
+    msg.files.length > 0
+  );
+}
+
+/**
+ * Get files from a message
+ */
+function getFilesFromMessage(msg: any): any[] {
+  if (!messageHasFiles(msg)) {
+    return [];
+  }
+  return msg.files;
+}
+
+/**
+ * Share a file with another channel/user
+ * This makes the file accessible to other users
+ */
+async function shareFileWithUser(client: any, fileId: string, channelId: string): Promise<any> {
+  try {
+    // Get the file info instead of trying to make it public
+    const result = await client.files.info({
+      file: fileId
+    });
+    
+    // If successful, return the file info
+    if (result.ok && result.file) {
+      logger.info(`Successfully retrieved file info for ${fileId}`);
+      return result.file;
+    }
+    
+    return null;
+  } catch (error) {
+    logger.error(`Error retrieving file info for ${fileId}:`, error);
+    return null;
+  }
+}
+
+/**
  * Find the first channel that the bot is a member of to use as the anonymous channel
  * This is called at startup and whenever we need to find a channel
  */
@@ -296,11 +341,35 @@ async function broadcastToMembers(
   senderId: string, 
   messageText: string, 
   threadMap: ThreadMap, 
-  isThreadReply: boolean
+  isThreadReply: boolean,
+  files?: any[]
 ): Promise<{successCount: number; botCount: number; eligibleRecipients: number}> {
   let successCount = 0;
   let botCount = 0;
   let eligibleRecipients = 0;
+  
+  // If there are files, make sure they're shared first (for images)
+  let sharedFiles = [];
+  if (files && files.length > 0) {
+    // Process each file to get its info
+    for (const file of files) {
+      try {
+        // Only process files that have an ID
+        if (file.id) {
+          // Get file info
+          const fileInfo = await shareFileWithUser(client, file.id, "");
+          if (fileInfo) {
+            sharedFiles.push(fileInfo);
+          }
+        }
+      } catch (error) {
+        logger.error(`Error processing file ${file.id}:`, error);
+      }
+    }
+    
+    // Log how many files were successfully processed
+    logger.info(`Processed ${sharedFiles.length} out of ${files.length} files for sharing`);
+  }
   
   for (const memberId of members) {
     // Skip sending to the original sender
@@ -336,15 +405,69 @@ async function broadcastToMembers(
       // If this is a thread reply and we have a thread mapping for this user
       const userThreadTs = threadMap.get(memberId);
       
+      // Prepare message options with common properties
+      const messageOptions: any = {
+        channel: dmResponse.channel.id,
+        mrkdwn: true
+      };
+
+      // Add files if they exist and were successfully shared
+      if (sharedFiles.length > 0) {
+        // Create blocks for better message formatting
+        messageOptions.blocks = [
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: messageText
+            }
+          }
+        ];
+        
+        // Add each file as a separate block
+        for (const file of sharedFiles) {
+          // For images, create an image block
+          if (file.mimetype && file.mimetype.startsWith('image/')) {
+            messageOptions.blocks.push({
+              type: "image",
+              title: {
+                type: "plain_text",
+                text: file.name || "Image"
+              },
+              image_url: file.url_private,
+              alt_text: file.name || "Image"
+            });
+          } else {
+            // For other files, create a section with a link
+            messageOptions.blocks.push({
+              type: "section",
+              text: {
+                type: "mrkdwn",
+                text: `*File:* <${file.url_private}|${file.name || "Attachment"}> (${file.pretty_type || file.filetype || "File"})`
+              }
+            });
+          }
+        }
+        
+        // Add context info at the bottom
+        messageOptions.blocks.push({
+          type: "context",
+          elements: [
+            {
+              type: "plain_text",
+              text: "Anonymous shared file"
+            }
+          ]
+        });
+      } else {
+        messageOptions.text = messageText;
+      }
+      
       if (isThreadReply && userThreadTs) {
         try {
           // Send as reply to the correct thread for this user
-          const response = await client.chat.postMessage({
-            channel: dmResponse.channel.id,
-            text: messageText,
-            thread_ts: userThreadTs,
-            mrkdwn: true
-          });
+          messageOptions.thread_ts = userThreadTs;
+          const response = await client.chat.postMessage(messageOptions);
           
           successCount++;
         } catch (threadError) {
@@ -352,11 +475,8 @@ async function broadcastToMembers(
           logger.warn(`Couldn't post to thread for user ${memberId}, sending as regular message: ${threadError}`);
           
           // Send as new message and store the new thread reference
-          const response = await client.chat.postMessage({
-            channel: dmResponse.channel.id,
-            text: messageText,
-            mrkdwn: true
-          });
+          delete messageOptions.thread_ts;
+          const response = await client.chat.postMessage(messageOptions);
           
           // Update the thread mapping with new timestamp
           threadMap.set(memberId, response.ts as string);
@@ -364,11 +484,7 @@ async function broadcastToMembers(
         }
       } else {
         // Send as regular message
-        const response = await client.chat.postMessage({
-          channel: dmResponse.channel.id,
-          text: messageText,
-          mrkdwn: true
-        });
+        const response = await client.chat.postMessage(messageOptions);
         
         // Store this message's timestamp for this user
         threadMap.set(memberId, response.ts as string);
@@ -516,11 +632,13 @@ app.message(async ({ message, client }) => {
   const msg = message as any;
   
   // Only process direct messages (im) that aren't from bots
-  if (msg.channel_type !== 'im' || msg.subtype) {
+  // Allow file_share subtype specifically for file attachments
+  if (msg.channel_type !== 'im' || (msg.subtype && msg.subtype !== 'file_share')) {
+    logger.info("Not a direct message or unsupported subtype, skipping", msg);
     return;
   }
   
-  logger.info(`Received DM: ${msg.text?.substring(0, 20)}...`, msg);
+  logger.info(`Received DM: ${msg.text?.substring(0, 20) || '[No text, possible file upload]'}...`, msg);
   
   try {
     // Find the target channel
@@ -560,6 +678,15 @@ app.message(async ({ message, client }) => {
       ? formatReplyWithId(msg.text || '', conversationId)
       : formatMessageWithId(msg.text || '', conversationId);
     
+    // Check for files in the message
+    const files = getFilesFromMessage(msg);
+    let hasFiles = files.length > 0;
+    
+    // If there are files, ensure they're shared first (for images)
+    if (hasFiles) {
+      logger.info(`Message contains ${files.length} files/images`);
+    }
+    
     // Broadcast to all members
     const { successCount, botCount, eligibleRecipients } = await broadcastToMembers(
       client, 
@@ -567,7 +694,8 @@ app.message(async ({ message, client }) => {
       senderId, 
       messageText, 
       threadMap, 
-      isThreadReply
+      isThreadReply,
+      files
     );
     
     // Notify user if no one received their message
@@ -599,11 +727,14 @@ app.message(async ({ message, client }) => {
       threadMap.set(senderId, msg.thread_ts as string);
     }
     
-    logger.info(`Broadcast anonymous ${isThreadReply ? 'thread reply' : 'message'} to ${successCount} members. Channel: #${targetChannel.name}, Conversation ID: ${conversationId}`);
+    const messageType = hasFiles ? 
+      'message with files' : 
+      (isThreadReply ? 'thread reply' : 'message');
+    
+    logger.info(`Broadcast anonymous ${messageType} to ${successCount} members. Channel: #${targetChannel.name}, Conversation ID: ${conversationId}`);
     
     // Clean up old conversation maps
     cleanupOldConversations();
-    
   } catch (error) {
     logger.error('Error processing DM:', error);
     
